@@ -1,0 +1,195 @@
+---
+title: "Dataset"
+author: "Divya Prima Crasta-237879"
+date: "2024-10-04"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Loading the libraries and data
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(GGally)
+library(knitr)
+library(randomForest)
+library(e1071)
+library(caret)
+load('combined_assay_data.RData')
+```
+
+```{r}
+print(head(assay.data))
+```
+
+```{r}
+head(penalty.data)
+```
+
+```{r}
+print(length(unique(assay.data[,'Abbreviation'])))
+
+# Identify duplicated values in the 'Abbreviation' column
+duplicates <- assay.data[duplicated(assay.data[,'Abbreviation']) | duplicated(assay.data[,'Abbreviation'], fromLast = TRUE), 'Abbreviation']
+
+print(paste("Compounds that occured twice:", paste(unique(duplicates), collapse = ",")) )
+```
+
+# Univariate Analysis
+
+## Distribution of Target variable
+
+```{r}
+assay.data$Toxicity <- as.factor(as.numeric(assay.data$Toxicity))
+table(assay.data$Toxicity)
+```
+-   Number of toxic compounds is slightly higher than number of non-toxic compounds.
+
+## Distribution of covariates
+
+### Summary Statistics
+```{r}
+X <- as.data.frame(apply(assay.data[, 3:ncol(assay.data)], 2, log))
+y <- assay.data$Toxicity
+log_data <- cbind(Toxicity = y, X)
+# Function to calculate the required statistics for each column
+summary_stats <- function(x) {
+  c(
+    minimum = min(x),
+    Q1 = quantile(x, 0.25),
+    median = median(x),
+    mean = mean(x, na.rm = TRUE),
+    Q3 = quantile(x, 0.75),
+    maximum = max(x),
+    variance = var(x),
+    sd = sd(x),
+    range = max(x) - min(x)
+  )
+}
+
+# Apply the function to each column of the selected data
+summary_df <- as.data.frame(t(apply(X, 2, summary_stats)))
+
+# Print the result
+print(summary_df)
+```
+#### Observations:
+
+- mean and median vary a lot due large extreme values.
+- Variances are large.
+
+
+### Boxplots
+```{r}
+# Convert to long format
+long_data <- as.data.frame(X) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
+# Ensure 'Variable' is a factor and ordered based on its appearance in the dataset
+long_data$Variable <- factor(long_data$Variable, levels = colnames(X))
+
+# Create boxplots for all numeric columns in one chart
+ggplot(long_data, aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "lightblue", outlier.color = "red") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Boxplots", x = "Variables", y = "Values")
+```
+
+### Histograms
+
+```{r}
+# Loop through each column of the dataset 'X'
+for (i in 1:ncol(X)) {
+  
+  # Get the column name
+  col_name <- colnames(X)[i]
+  
+  # Extract the mean and median for the current column from summary_df
+  mean_val <- summary_df[col_name, "mean"]
+  median_val <- summary_df[col_name, "median"]
+  
+  # Create the histogram and add vertical lines for mean and median
+  gg <- ggplot(X, aes(x = get(col_name))) + 
+    geom_histogram( fill = "lightblue", color = "black") + 
+    geom_vline(aes(xintercept = mean_val), linetype = "dotted", color = "red", size = 1) + # Dotted red line for mean
+    geom_vline(aes(xintercept = median_val), linetype = "solid", color = "black", size = 1) + # Solid black line for median
+    xlab(col_name) + 
+    theme_minimal() +
+    labs(title = paste("Histogram of", col_name))
+  
+  # Print the plot
+  print(gg)
+}
+```
+
+
+# Bivariate Analysis
+
+## Correlation
+
+```{r}
+cor_matrix <- cor(X)
+# Find pairs of variables with correlation > 0.9
+high_cor <- which(abs(cor_matrix) > 0.9, arr.ind = TRUE )
+high_cor <- high_cor[high_cor[,1]!=high_cor[,2],]
+
+# Get the variable names and their correlation values
+high_cor_pairs <- data.frame(
+  var1 = rownames(cor_matrix)[high_cor[, 1]],
+  var2 = colnames(cor_matrix)[high_cor[, 2]],
+  correlation = cor_matrix[high_cor]
+)
+
+# Remove duplicate pairs (since correlation matrix is symmetric)
+high_cor_pairs <- high_cor_pairs[!duplicated(t(apply(high_cor_pairs, 1, sort))), ]
+
+# Sort the pairs by correlation in descending order
+high_cor_pairs <- high_cor_pairs[order(-abs(high_cor_pairs$correlation)), ]
+
+# Display the sorted pairs of variables with high correlation
+print(high_cor_pairs)
+
+print(length(high_cor_pairs[,1]))
+```
+### Notes:
+
+```{r}
+corrplot(cor_matrix)
+```
+
+
+
+```{r}
+# Create pairwise scatter plots colored by 'Toxicity'
+#ggpairs(assay.data[, 2:ncol(assay.data)], aes(color = Toxicity, alpha = 0.7), progress = FALSE) +
+ # theme_bw() +
+  #labs(title = "Pairwise Scatter Plots for Predictor Variables (Colored by Toxicity)")
+
+```
+
+## Scatterplots between Toxicity and other variables
+
+```{r fig.width= 12, fig.height= 80}
+cols =colnames(log_data)
+plot_list = list()
+for (i in 2:ncol(X)) {
+  colname <- cols[i]
+  p <- ggplot(X, aes(x = .data[[colname]], y)) +
+    geom_point() +
+    labs(x = colname, y = "Toxicity") +
+    theme_minimal()
+  #print(p)
+  # Add each plot to the list
+  plot_list[[i-1]] <- p
+}
+
+# Arrange the plots in a grid (choose the number of rows/columns as needed)
+grid.arrange(grobs = plot_list, ncol = 2)
+```
+
+
+
+
