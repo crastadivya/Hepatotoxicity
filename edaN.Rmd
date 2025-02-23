@@ -108,7 +108,7 @@ for (i in 1:ncol(X_n_l)) {
 
 # Bivariate analysis
 ```{r}
-cor_matrix <- cor(X_n_l)
+cor_matrix <- cor(X_n_l, na.rm = TRUE)
 # Find pairs of variables with correlation > 0.9
 high_cor <- which(abs(cor_matrix) > 0.9, arr.ind = TRUE )
 high_cor <- high_cor[high_cor[,1]!=high_cor[,2],]
