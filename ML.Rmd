@@ -1,0 +1,334 @@
+---
+title: "ML"
+author: "Divya Prima Crasta-237879"
+date: "2024-10-26"
+output: html_document
+---
+
+```{r}
+library(randomForest)
+library(mlbench)
+library(caret)
+library(e1071)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(ggplot2)
+```
+
+```{r}
+load("combined_assay_data.RData")
+```
+
+```{r}
+assay.data$Toxicity <- factor(assay.data$Toxicity, levels = c(0,1))
+dataset <- assay.data[,-1]
+X <- dataset[,-1]
+logX <- as.data.frame(apply(X, 2, log))
+y <- dataset[,1]
+log_data <- cbind(y, logX)
+```
+
+# Univariate analysis
+
+## Distribution of target variable
+
+```{r}
+table(y)
+```
+## Distribution of covariates
+
+### Boxplots
+
+```{r}
+long_data <- as.data.frame(logX) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
+# Ensure 'Variable' is a factor and ordered based on its appearance in the dataset
+long_data$Variable <- factor(long_data$Variable, levels = colnames(X))
+
+# Create boxplots for all numeric columns in one chart
+ggplot(long_data, aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "lightblue", outlier.color = "red") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Boxplots", x = "Variables", y = "Values")
+```
+### Summary Statistics
+
+```{r}
+# Function to calculate the required statistics for each column
+summary_stats <- function(x) {
+  c(
+    minimum = min(x),
+    Q1 = quantile(x, 0.25),
+    median = median(x),
+    mean = mean(x, na.rm = TRUE),
+    Q3 = quantile(x, 0.75),
+    maximum = max(x),
+    variance = var(x),
+    sd = sd(x),
+    range = max(x) - min(x)
+  )
+}
+
+# Apply the function to each column of the selected data
+summary_df <- as.data.frame(t(apply(logX, 2, summary_stats)))
+
+# Print the result
+print(summary_df)
+```
+
+```{r}
+# Loop through each column of the dataset 'X'
+for (i in 1:ncol(logX)) {
+  
+  # Get the column name
+  col_name <- colnames(logX)[i]
+  
+  # Extract the mean and median for the current column from summary_df
+  mean_val <- summary_df[col_name, "mean"]
+  median_val <- summary_df[col_name, "median"]
+  
+  # Create the histogram and add vertical lines for mean and median
+  gg <- ggplot(X, aes(x = get(col_name))) + 
+    geom_histogram( fill = "lightblue", color = "black") + 
+    geom_vline(aes(xintercept = mean_val), linetype = "dotted", color = "red", size = 1) + # Dotted red line for mean
+    geom_vline(aes(xintercept = median_val), linetype = "solid", color = "black", size = 1) + # Solid black line for median
+    xlab(col_name) + 
+    theme_minimal() +
+    labs(title = paste("Histogram of", col_name))
+  
+  # Print the plot
+  print(gg)
+}
+```
+# Bivariate Analysis
+
+## Scatterplots between Toxicity and other variables
+
+```{r fig.width= 12, fig.height= 80}
+cols =colnames(logX)
+plot_list = list()
+for (i in 1:ncol(logX)) {
+  colname <- cols[i]
+  p <- ggplot(cbind(logX, y), aes(x = .data[[colname]], y = y)) +
+    geom_point() +
+    labs(x = colname, y = "Toxicity") +
+    theme_minimal()
+  #print(p)
+  # Add each plot to the list
+  plot_list[[i]] <- p
+}
+
+# Arrange the plots in a grid (choose the number of rows/columns as needed)
+grid.arrange(grobs = plot_list, ncol = 2)
+```
+## Correlation
+
+```{r}
+cor_matrix <- cor(logX)
+diag(cor_matrix) <- 0
+# Find pairs of variables with correlation > 0.9
+high_cor <- which(abs(cor_matrix) > 0.9 , arr.ind = TRUE)
+
+# Get the variable names and their correlation values
+high_cor_pairs <- data.frame(
+  var1 = rownames(cor_matrix)[high_cor[, 1]],
+  var2 = colnames(cor_matrix)[high_cor[, 2]],
+  correlation = cor_matrix[high_cor]
+)
+
+# Remove duplicate pairs (since correlation matrix is symmetric)
+high_cor_pairs <- high_cor_pairs[!duplicated(high_cor_pairs$correlation), ]
+
+# Sort the pairs by correlation in descending order
+high_cor_pairs <- high_cor_pairs[order(abs(high_cor_pairs$correlation), decreasing = TRUE), ]
+
+# Display the sorted pairs of variables with high correlation
+print(high_cor_pairs)
+
+print(length(high_cor_pairs[,1]))
+```
+
+
+```{r}
+.result = function(Pred,cl){
+  res = table(Pred,cl)
+  TP = as.double(res[2, 2])   # maybe not [2,2] cause 2 means "malignant"--positive
+  TN = as.double(res[1, 1])  # maybe not [1,1] cause 1 means "benign"--negative
+  FP = as.double(res[2, 1])
+  FN = as.double(res[1, 2])
+  
+  ACC = (TP + TN) / (TP + TN + FP + FN)
+  SE = TP / (TP + FN)
+  SP = TN/(FP + TN)
+  F1 = 2 * TP / (2 * TP + TP + FN) # F1 score is the harmonic mean of precision and sensitivity
+  MCC = (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN+FN))
+  result = list()
+  result$pred_label = Pred
+  result$table = res
+  result$ACC = ACC
+  result$SE = SE
+  result$SP = SP
+  result$F1 = F1
+  result$MCC = MCC
+  return(result)
+}
+
+rf.cv <- function (xtr, ytr, cv.fold, type , 
+                      trees, mtrysize ) { 
+  
+  mx = dim(xtr)[1]
+  rfpred <- ytr
+  prob = matrix(nrow = length(ytr), ncol = 2)
+  index = rep(1:cv.fold, nrow(xtr))
+  ind = index[1:nrow(xtr)]
+  ret = list('table' = list(), 'ACC' = list(),'SE' = list(),'SP'= list(),'F1' =   list(),'MCC'= list(),'RFPred'= list(),'prob'= list())
+  for (k in 1:cv.fold) {
+    cat(".")
+    xcal <- xtr[ind != k, ] 
+    ycal <- ytr[ind != k]
+    xtest <- xtr[ind == k, ] 
+    ytest <- ytr[ind == k]   
+    rfout <- randomForest::randomForest(ycal~., data = data.frame(xcal, ycal),  
+                          ntrees = trees, mtry = mtrysize,         
+                          importance = FALSE)
+    if (type == 'regression') {
+      rfpred[ind==k] <- predict(rfout, xtest)
+    } else if (type == 'classification') {
+      rfpred[ind == k] = predict(rfout, xtest, type = "response")
+      prob[ind == k, ] = predict(rfout, xtest, type = "prob")
+    }    
+  if (type == 'regression') {
+    RMSECV = sqrt(t(ytr - rfpred) %*% (ytr - rfpred) / mx)
+    q2 = 1 - t(ytr - rfpred) %*% (ytr - rfpred) / (t(ytr - mean(ytr)) %*% (ytr - mean(ytr))) 
+    err = ytr - rfpred
+    ret <- list(RFpred = rfpred, Error = err, RMSECV = RMSECV, Q2 = q2)
+  } else if (type == 'classification') {
+    r = .result(rfpred, ytr)
+    ret$table[[k]] = r$table
+    ret$ACC[[k]] = r$ACC
+    ret$SE[[k]] = r$SE
+    ret$SP[[k]] = r$SP
+    ret$F1[[k]] = r$F1
+    ret$MCC[[k]] = r$MCC
+    ret$RFPred[[k]] = rfpred
+    ret$prob[[k]] = prob
+  }
+  }
+  cat("\n")
+  return(ret)
+}
+
+result = rf.cv(X, y, cv.fold = 10, type = "classification", trees = 100,
+  mtrysize = 5)
+```
+
+
+```{r}
+rf_model <- randomForest(X, y, mtry = 5, ntree = 100, maxnodes = 20)
+sum(rf_model$predicted == y )/ length(y) # out of bag estimates
+sum(predict(rf_model, X) == y)/length(y) # prediction using all trees.
+
+```
+
+
+```{r}
+# using ranger
+
+#library(ranger)
+
+rF.ranger <- ranger(y ~. , log_data)
+print(1 - rF.ranger$prediction.error)
+
+predictrF <- function(mod, data){
+  return(predict(mod, data)$predictions)
+}
+
+cv(ranger, formula(y ~ .), data = log_data, predict.fun = predictrF)
+```
+
+```{r}
+library(mlr3)
+library(mlr3tuningspaces)
+library(mlr3tuning)
+library(mlr3verse)
+library(mlr3extralearners)
+library(palmerpenguins)
+
+instance = tune(
+  tuner = tnr("grid_search", resolution = 5),
+  task = tsk("penguins"),
+  learner = lts(lrn("classif.rpart")),
+  resampling = rsmp("cv", folds = 3),
+  measure = msr("classif.ce")
+)
+
+as.data.table(instance$archive)[, list(minsplit, minbucket, cp, classif.ce, resample_result)]
+
+instance$result
+
+instance$result_learner_param_vals
+
+```
+
+
+```{r}
+#library(mlr3)
+library(mlr3tuning)
+library(paradox)
+library(mlr3tuningspaces)
+
+# Create a task for classification
+task <- TaskClassif$new(id = "log_data_task", backend = log_data, target = "y")
+
+# Run tuning with grid search
+instance_rf <- tune(
+  tuner = tnr("grid_search", resolution = 5),
+  task = task,
+  learner = lts(lrn("classif.ranger")),
+  resampling = rsmp("cv", folds = 10),
+  measure = msr("classif.ce")
+)
+
+as.data.table(instance_rf$archive)[, c('mtry.ratio', 'num.trees', 'replace', 'sample.fraction', 'classif.ce', 'resample_result')]
+
+instance_rf$result
+
+instance_rf$result_learner_param_vals
+```
+
+```{r}
+# train on whole dataset using best hyperparameters. [Final model]
+learner = lrn("classif.ranger")
+learner$param_set$values = instance_rf$result_learner_param_vals
+learner$train(task)
+preds = learner$predict(task)
+sum(diag(table(preds$truth, preds$response)))/nrow(log_data)
+
+```
+
+```{r}
+lrn_rf2 <- lrn("classif.ranger",
+  mtry = to_tune(1, 5, logscale = FALSE),
+  num.trees = to_tune(100, 500, logscale = FALSE),
+  min.bucket = to_tune(1, 5, logscale = FALSE),
+  num.random.splits = to_tune(10, 50, logscale = FALSE)
+ )
+
+instance_rf2 <- ti(
+  task = task,
+  learner = lrn_rf2,
+  resampling = rsmp("cv", folds = 10),
+  measures = msr("classif.ce"),
+  terminator = trm("none")
+)
+
+tuner = tnr("grid_search", resolution = 5)
+
+tuner$optimize(instance_rf2)
+
+instance_rf2$result
+
+```
+
