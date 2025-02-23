@@ -25,30 +25,14 @@ data_m2 <- read.csv("E:/Thesis/data/data_imputed_miss2.csv")
 X <- as.matrix(data_m2[,-1])
 # X is logarithmized, normalized, imputed(miss II)
 y <- data_m2$Toxicity
-
-X_n_l = X
-
-#load('combined_assay_data.RData')
-#X <- assay.data[,3:length(assay.data)]
-#X_n <- apply(X[,2:length(X)], 2, function(x) x / X$Cmax)
-#X_n_l <- apply(X_n, 2, log)
-
-data_n_l = as.data.frame(X_n_l)
-data_n_l$Toxicity = y
-head(data_n_l)
 ```
 
-## tests
-
-### anova.test
-
-```{r}
 # Assumption 1: Normality
 
-for (i in 1:ncol(X_n_l)) {
+for (i in 1:ncol(X)) {
   
   # Get the column name
-  col_name <- colnames(X_n_l)[i]
+  col_name <- colnames(X)[i]
   
   # Extract the mean and median for the current column from summary_df
   mean_val <- summary_df[col_name, "mean"]
@@ -66,17 +50,15 @@ for (i in 1:ncol(X_n_l)) {
 }
 ```
 
-
-
 ```{r fig.width=20}
 # Assumption2: Variance within each group is equal
 
 # Convert to long format
-long_data <- as.data.frame(X_n_l) %>%
+long_data <- as.data.frame(X) %>%
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
 # Ensure 'Variable' is a factor and ordered based on its appearance in the dataset
-long_data$Variable <- factor(long_data$Variable, levels = colnames(X_n_l))
-long_data$Toxicity <- rep(y, each = ncol(X_n_l))
+long_data$Variable <- factor(long_data$Variable, levels = colnames(X))
+long_data$Toxicity <- rep(y, each = ncol(X))
 
 # Create boxplots for all numeric columns in one chart
 ggplot(long_data, aes(x = Variable, y = Value, fill = Toxicity)) +
@@ -86,19 +68,18 @@ ggplot(long_data, aes(x = Variable, y = Value, fill = Toxicity)) +
   labs(title = "Boxplots", x = "Variables", "Values")
 
 ## does not satisfy the variance homogeniety assumption
-
 ```
 
 ```{r}
 # Convert to long format
-long_data <- as.data.frame(X_n_l) %>%
+long_data <- as.data.frame(X) %>%
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
 
 # Ensure 'Variable' is a factor and ordered based on its appearance in the dataset
-long_data$Variable <- factor(long_data$Variable, levels = colnames(X_n_l))
+long_data$Variable <- factor(long_data$Variable, levels = colnames(X))
 
 # Assign toxicity labels (assuming y is a vector of 0s and 1s)
-long_data$Toxicity <- rep(y, each = ncol(X_n_l))
+long_data$Toxicity <- rep(y, each = ncol(X))
 long_data$Toxicity <- as.factor(long_data$Toxicity)  # Ensure categorical
 
 # Create boxplots for each variable with class 0 (blue) and class 1 (red)
@@ -110,16 +91,14 @@ ggplot(long_data, aes(x = Variable, y = Value, fill = Toxicity)) +
   labs(title = "Boxplots by Variable and Toxicity Class", x = "Variables", y = "Values", fill = "Toxicity Class")
 ```
 
-
-
-### kruskal test
+### Kruskal Test
 
 ```{r}
 # Set the significance level
 alpha <- 0.05
 
 # Perform Kruskal-Wallis test for each variable and collect the results
-kruskal_results <- apply(X_n_l, 2, function(var) {
+kruskal_results <- apply(X, 2, function(var) {
   # Perform the test
   test_result <- kruskal.test(var ~ y)
   
@@ -130,127 +109,21 @@ kruskal_results <- apply(X_n_l, 2, function(var) {
 # Convert results to a data frame with the desired format
 kruskal_df <- as.data.frame(t(kruskal_results))
 rownames(kruskal_df) <- "Kruskal"
-colnames(kruskal_df) <- colnames(X_n_l)
+colnames(kruskal_df) <- colnames(X)
 
 # Display the results
 print(kruskal_df)
-
 ```
 
-```{r}
-# Set the significance level
-alpha <- 0.05
-
-# Perform Kruskal-Wallis test for each variable and collect the results
-kruskal_results <- t(sapply(data.frame(X_n_l), function(var) {
-  test_result <- kruskal.test(var ~ y)  # Perform Kruskal-Wallis test
-  significant <- ifelse(test_result$p.value < alpha, "yes", "no")  # Mark "yes" or "no"
-  
-  # Format p-value to 4 significant digits
-  formatted_p_value <- formatC(test_result$p.value, format = "e", digits = 4)
-  
-  c(Reject = significant, P_Value = formatted_p_value)  # Store both values
-}))
-
-# Convert results to a data frame
-kruskal_df <- as.data.frame(kruskal_results)
-rownames(kruskal_df) <- colnames(X_n_l)  # Assign variable names as row names
-
-# Display the results
-print(kruskal_df)
-
-
-```
-
-
-### roc-auc
+### ROC-AUC
 
 ```{r}
-aucs <- apply(X_n_l, 2, function(var) abs(0.5 - measureAUC(var, y, positive = 1, negative = 0)))
+aucs <- apply(X, 2, function(var) abs(0.5 - measureAUC(var, y, positive = 1, negative = 0)))
 print(aucs)
 print(sort(aucs, decreasing = TRUE))
 ```
 
-```{r warning=FALSE}
-cols = names(sort(aucs, decreasing = TRUE))
-toxicity_inv <- y != 1
-for(col in cols){
-  get_roc(X_n_l[,col], toxicity_inv)
-}
-```
-
-
-
-### OneR
-
-```{r}
-# Use OneR with RWeka
-#oneR_model <- OneR(Toxicity ~ ., data = as.data.frame(cbind("Toxicity" = as.factor(as.numeric(y)), X)))
-
-# Print the model to see the rules for each feature
-#print(oneR_model)
-
-# Evaluate the feature importance based on OneR's rule-based score
-# We can use FSelector's 'oneR' function for calculating the scores for each feature
-scores <- oneR(Toxicity ~ ., data = data_n_l)
-
-# Print the scores for each feature
-print(scores[order(scores[,1], decreasing = TRUE), , drop = FALSE])
-
-
-```
-
-### univariate.model.performance
-
-```{r}
-# Initialize an empty vector to store accuracies
-accuracies <- c()
-cv_accuracies <- c()
-
-for (i in 1:ncol(X_n_l)) {
-  # Select the single predictor variable
-  predictor <- colnames(X_n_l)[i]
-  
-  # Fit rpart model with one variable
-  model <- rpart(Toxicity ~ ., data = data_n_l[,c(predictor, "Toxicity")], method = "class")
-  # Set up cross-validation control
-  
-  #------------------------------------------------------------------------------------------------#
-  
-
-  # Output the cross-validated accuracy
-  cv_accuracy <- cv(rpart, Toxicity ~. , data = data_n_l[,c(predictor, "Toxicity")], predict.fun = predict_dt, method = 'class')
-
-  #------------------------------------------------------------------------------------------------#
-  
-  # Make predictions
-  predictions <- predict(model, data_n_l[, predictor, drop = FALSE], type = "class")
-  
-  # Calculate accuracy
-  accuracy <- sum(predictions == data_n_l$Toxicity) / nrow(data_n_l)
-  
-  # Store the accuracy with column name as key
-  accuracies[predictor] <- accuracy
-  
-  cv_accuracies[predictor] <- cv_accuracy
-}
-
-# Convert accuracy vector to a data frame with row name as "rpart"
-
-# Print the final accuracy data frame
-print(sort(cv_accuracies, decreasing = TRUE))
-
-```
-
-### Variances
-
-```{r}
-vars <- apply(X_n_l, 2, var)
-print(sort(vars, decreasing = TRUE))
-```
-
-
-## feature importance
+### Feature Importance
 
 ```{r}
 # Train a random forest model with impurity-based feature importance
@@ -264,153 +137,42 @@ rf_model <- ranger(
 # Extract impurity-based feature importance
 impurity_importance <- rf_model$variable.importance
 
-
-# Load necessary libraries
-
-# Train a random forest model with impurity-based feature importance
-rf_model <- ranger(
-  formula = Toxicity ~ ., 
-  data = data_n_l, 
-  importance = "permutation",  # Get impurity-based importance
-  classification = TRUE
-)
-
-# Extract permutation-based feature importance
-permutation_importance <- rf_model$variable.importance
-
 print(sort(impurity_importance, decreasing = TRUE))
-print(sort(permutation_importance, decreasing = TRUE))
-```
-## Information Filters
-
-### FSelectorRcpp
-
-```{r}
-library(FSelector)
-library(FSelectorRcpp)
-info_gain <- information_gain(formula = Toxicity~., data = data_n_l, type = "infogain")
-info_gain <- info_gain[order(info_gain[,2], decreasing = TRUE),]
-print(info_gain)
 ```
 
-```{r}
-gain_ratio <- gain.ratio(Toxicity~., data = data_n_l)
-gain_ratio <- sort_by.data.frame(gain_ratio, gain_ratio$attr_importance, decreasing = TRUE)
-print(gain_ratio)
-```
+### Final Result
 
 ```{r}
-sym_unc <- symmetrical.uncertainty(Toxicity~., data = data_n_l)
-sym_unc <- sort_by.data.frame(sym_unc, sym_unc$attr_importance, decreasing = TRUE)
-print(sym_unc)
-```
-
-### praznik
-
-```{r}
-library(praznik)
-X_n_l <- as.data.frame(X_n_l)
-mim <- MIM(X_n_l, y, k = ncol(X_n_l))
-print(sort(mim$score, decreasing = TRUE))
-```
-
-```{r}
-mrmr <- MRMR(X = X_n_l, Y = y, k = ncol(X_n_l))
-print(sort(mrmr$score, decreasing = TRUE))
-```
-
-```{r}
-jmi <- JMI(X = X_n_l, Y = y, k = ncol(X_n_l))
-print(sort(jmi$score, decreasing = TRUE))
-```
-
-```{r}
-jmim <- JMIM(X = X_n_l, Y = y, k = ncol(X_n_l))
-print(sort(jmim$score, decreasing = TRUE))
-```
-
-```{r}
-disr <- DISR(X = X_n_l, Y = y, k = ncol(X_n_l))
-print(sort(disr$score, decreasing = TRUE))
-```
-
-```{r}
-njmim <- NJMIM(X = X_n_l, Y = y, k = ncol(X_n_l))
-print(sort(njmim$score, decreasing = TRUE))
-```
-
-```{r}
-cmim <- CMIM(X = X_n_l, Y = y, k = ncol(X_n_l))
-print(sort(cmim$score, decreasing = TRUE))
-```
-
-
-
-## Final result
-
-```{r}
-variables <- colnames(X_n_l)
+variables <- colnames(X)
 # Create individual data frames, sorted by each metric
 df_aucs <- data.frame(variable = variables, aucs = round(aucs, 4)) %>%
   arrange(desc(aucs))
 
-df_accuracies <- data.frame(variable = variables, accuracies = round(cv_accuracies,4) ) %>%
-  arrange(desc(accuracies))
-
-df_impurity <- data.frame(variable = variables, impurity_importance = round(impurity_importance,4)) %>%
-  arrange(desc(impurity_importance))
-
-df_permutation <- data.frame(variable = variables, permutation_importance = round(permutation_importance,4)) %>%
-  arrange(desc(permutation_importance))
-
-df_mim <- data.frame(variable = variables, mim = round(mim$score, 4)) %>% arrange(desc(mim))
-df_mrmr <- data.frame(variable = variables, mrmr = round(mrmr$score, 4)) %>% arrange(desc(mrmr))
-df_jmi <- data.frame(variable = variables, jmi = round(jmi$score, 4)) %>% arrange(desc(jmi))
-df_jmim <- data.frame(variable = variables, jmim = round(jmim$score, 4)) %>% arrange(desc(jmim))
-df_disr <- data.frame(variable = variables, disr = round(disr$score, 4)) %>% arrange(desc(disr))
-df_njmim <- data.frame(variable = variables, njmim = round(njmim$score, 4)) %>% arrange(desc(njmim))
-df_cmim <- data.frame(variable = variables, cmim = round(cmim$score, 4)) %>% arrange(desc(cmim))
-
 # Combine the sorted data frames into one table
 resultN <- data.frame(
-  v_aucs = df_aucs$variable, aucs = df_aucs$aucs,
-  v_accs = df_accuracies$variable, accs = df_accuracies$accuracies,
-  v_impur = df_impurity$variable, imp = df_impurity$impurity_importance,
-  v_perm = df_permutation$variable, perm = df_permutation$permutation_importance,
-  v_i.gain = info_gain$attributes, info_gain = round(info_gain$importance, 4),
-  v_gain.r = rownames(gain_ratio), gain.r = round(gain_ratio$attr_importance, 4),
-  v_sym = rownames(sym_unc), sym = round(sym_unc$attr_importance, 4),
-  v_mim = df_mim$variable, df_mim$mim,
-  v_mrmr = df_mrmr$variable, mrmr = df_mrmr$mrmr, 
-  v_jmi = df_jmi$variable, df_jmi$jmi,
-  v_jmim = df_jmim$variable, jmim = df_jmim$jmim,
-  v_disr = df_disr$variable, disr = df_disr$disr,
-  v_njmim = df_njmim$variable, njmim = df_njmim$njmim,
-  v_cmim = df_cmim$variable, cmim = df_cmim$cmim
-  )
+  v_aucs = df_aucs$variable, aucs = df_aucs$aucs
+)
 
 # View the result
 print(resultN)
-
 ```
 
 ```{r}
 flags <- data.frame(matrix(0, nrow = nrow(resultN), ncol = ncol(resultN)%/%2))
-rownames(flags) = colnames(X_n_l)
+rownames(flags) = colnames(X)
 colnames(flags) = colnames(resultN)[seq(1, ncol(resultN), 2)]
 for (col in colnames(flags)){
-  for (variable in colnames(X_n_l)){
+  for (variable in colnames(X)){
    if(variable %in% resultN[24,col]){
      flags[variable, col] = 1
    } 
   }
 }
 
-#colnames(flags) <- c('AUCS', 'ACCS', 'IMP', 'PERM', 'I.GAIN', 'SYM', 'MIM', 'MRMR', 'JMI', 'JMIM', 'DISR', 'NJMIM', 'CMIM')
-
 flags$sum <- rowSums(flags)
 
 View(flags[order(flags$sum), c("sum"), drop = FALSE])
+
 
 ```
 
