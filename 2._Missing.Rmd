@@ -1,0 +1,147 @@
+---
+title: "Missing Values"
+author: "Divya Prima Crasta-237879"
+date: "2024-11-22"
+output: pdf_document
+---
+
+```{r}
+library(Amelia)
+library(miceRanger)
+
+library(mlr3tuning)
+library(mlr3learners)
+
+library(mlr3extralearners)
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+```
+
+```{r}
+load('combined_assay_data.RData')
+X <- assay.data[,3:length(assay.data)]
+assay.data$Toxicity <- factor(assay.data$Toxicity, levels = unique(assay.data$Toxicity))
+y <- assay.data$Toxicity
+X_n <- apply(X[,2:length(X)], 2, function(x) x / X$Cmax)
+X_n_l <- apply(X_n, 2, log)
+X_l <- apply(X, 2, log)
+```
+
+```{r}
+X_n_l2 = X_n_l
+X_n_l2[penalty.data[,-1] == 1 ] <-  NA
+X_n_l2 = data.frame(X_n_l2)
+data_n_l2 <- cbind(X_n_l2, Toxicity = as.factor(y))
+
+# Define a classification task
+task_wm <- TaskClassif$new(id = "data_wm", backend = data_n_l2, target = "Toxicity")
+```
+
+
+```{r}
+#dev.new(width = 10, height = 8)
+missmap(X_n_l2, main = 'Missingness of the data', x.cex = 0.7)
+nas = apply(X_n_l2, 2, function(col) sum(is.na(col)))
+barplot(nas, las = 2)
+
+# since ALOEC.Min, ALOEC.Med has no NA values, it need not be imputed, so we exclude it.
+penalty_new <- penalty.data %>% select(-ALOEC.Min, -ALOEC.Med)
+
+p_cor = apply(penalty_new[,-1], 2, function(col) cor(col, as.numeric(y)))
+p_cor <- as.data.frame(sort(abs(round(p_cor,4)), decreasing = TRUE))
+```
+
+```{r}
+# Exclude any non-numeric columns (e.g., Toxicity)
+penalty_vars <- penalty.data[, sapply(penalty.data, is.numeric)]
+
+# Calculate total missing values per variable
+missing_total <- penalty_vars %>%
+  summarise(across(everything(), sum)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Missing") %>%
+  mutate(Variable = factor(Variable, levels = colnames(penalty_vars)))  # preserve order
+
+# Plot
+ggplot(missing_total, aes(x = Variable, y = Missing)) +
+  geom_bar(stat = "identity", fill = "#1f77b4") +
+  labs(
+    x = "Variable",
+    y = "Number of Missing Values"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  )
+
+```
+
+
+```{r}
+penalty_vars <- penalty.data[, -1]
+penalty.data$Toxicity <- assay.data$Toxicity
+
+# Calculate the number of missing values (sum of 1s) for each variable grouped by Toxicity
+missing_data <- penalty_vars %>%
+  group_by(Toxicity = penalty.data$Toxicity) %>%
+  summarise(across(everything(), sum, .names = "Missing_{.col}")) %>%
+  pivot_longer(cols = -Toxicity, names_to = "Variable", values_to = "Missing") %>%
+  mutate(
+    Variable = gsub("Missing_", "", Variable),
+    Variable = factor(Variable, levels = colnames(penalty_vars))  # Set desired order
+  )
+
+# Create the barplot
+ggplot(missing_data, aes(x = Variable, y = Missing, fill = as.factor(Toxicity))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  scale_fill_manual(
+    values = c("0" = "red", "1" = "blue"),
+    labels = c("Toxicity = 0", "Toxicity = 1"),
+    name = "Toxicity"
+  ) +
+  labs(
+    x = "Variable",
+    y = "Number of Missing Values"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+```
+
+# Correlation of penalty variables with toxicity
+
+```{r}
+miss_cor_df <- cor(cbind(penalty.data[, -1], as.numeric(y)))[1:24, 25]
+# Convert named numeric vector to data frame
+miss_cor_df <- data.frame(
+  var = names(miss_cor_df),
+  abs_cor = abs(as.numeric(miss_cor_df)),
+  stringsAsFactors = FALSE
+)
+
+# Remove NA values (from constant columns)
+miss_cor_df <- na.omit(miss_cor_df)
+
+# Keep the original order
+miss_cor_df$var <- factor(miss_cor_df$var, levels = miss_cor_df$var)
+
+# Plot
+ggplot(miss_cor_df, aes(x = var, y = abs_cor)) +
+  geom_point(color = "black", size = 3) +
+  ylim(0, 0.4) +
+  labs(
+    x = "Variable (Missingness Flag)",
+    y = "Absolute Correlation with Toxicity"#,
+    #title = "Correlation of Missingness Indicators with Toxicity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 42, vjust = 1, hjust = 1)#,
+    #plot.title = element_text(face = "bold", size = 16, hjust = 0.5)
+  )
+
+
+```

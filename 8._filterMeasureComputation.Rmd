@@ -1,0 +1,197 @@
+---
+title: "6._filterMeasureComputation"
+author: "Divya Prima Crasta-237879"
+date: "2025-07-14"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(mlr3)
+library(RWeka)
+library(rpart)
+library(ranger)
+library(FSelector)
+library(FSelectorRcpp)
+library(praznik)
+library(mlr3extralearners)
+library(mlr3measures)
+library(mlr)
+```
+
+```{r}
+get_filter <- function(data_train){
+  
+  X_train <- data_train %>% select(-"Toxicity")
+  y_train <- data_train$Toxicity
+  
+  variables <- colnames(X_train)
+  
+  #----------------------------------------1. UNIVARIATE TESTS---------------------------------------------
+  ######----------------------------------------anova-----------------------------------------######
+  data_train$Toxicity <- as.factor(data_train$Toxicity)  # ensure target is factor if it's classification
+  task <- makeClassifTask(data = data_train, target = "Toxicity")
+  anova_vals <- generateFilterValuesData(task, method = "anova.test")
+  df_anova <- data.frame(variable = anova_vals$data$name, anova_scr = round(anova_vals$data$value, 4)) %>%   arrange(desc(anova_scr))  
+
+  ######----------------------------------------kruskal-----------------------------------------######
+  kruskal_vals <- generateFilterValuesData(task, method = "kruskal.test")
+  kruskal_vals$data
+  df_kruskal <- data.frame(variable = kruskal_vals$data$name, kruskal_scr = round(kruskal_vals$data$value, 4)) %>% arrange(desc(kruskal_scr))
+
+  ######----------------------------------------chi-----------------------------------------######
+  chi_vals <- chi.squared(Toxicity ~ ., data = data_train)
+  df_chi <- data.frame(variable = rownames(chi_vals), chi_scr = round(chi_vals$attr_importance, 4)) %>% arrange(desc(chi_scr))
+  
+  
+  #---------------------------------------------------------------------------------------------------------------
+  #------------------------------------2. UNIVARIATE PREDICTIVE PERFORMANCE---------------------------------------
+  
+  ######-------------------------------------------------auc-----------------------------------------######
+  
+  aucs <- apply(X_train, 2, function(var) abs(0.5 - measureAUC(var, y_train, positive = 1, negative = 0)))
+  df_aucs <- data.frame(variable = variables, aucs = round(aucs, 4)) %>%
+  arrange(desc(aucs))
+  
+  ######------------------------------------------------oneR-----------------------------------------######
+  oneR_scr <- oneR(Toxicity ~ ., data = data_train)
+  df_oneR <- data.frame(variable = variables, round(oneR_scr, 4)) %>%
+  arrange(desc(oneR_scr))
+  
+  ######--------------------------------------univariate model accuracy---------------------------------######
+  
+
+  # Initialize an empty named vector to store accuracies
+  accuracies <- c()
+
+  for (predictor in variables) {
+    # Subset data to the current predictor and target
+    subset_data <- data_train[, c(predictor, "Toxicity")]
+
+    # Create classification task
+    task <- TaskClassif$new(id = predictor, backend = subset_data, target = "Toxicity")
+
+    # Define learner
+    learner <- lrn("classif.rpart")
+
+    # Train the model
+    learner$train(task)
+
+    # Predict on the same data
+    prediction <- learner$predict(task)
+
+    # Compute accuracy
+    acc <- prediction$score(msr("classif.acc"))
+
+    # Store accuracy
+    accuracies[predictor] <- acc
+  }
+  df_accuracies <- data.frame(variable = variables, accuracies = round(accuracies,4) ) %>%
+  arrange(desc(accuracies))
+  
+#----------------------------------------------------3. Variance ------------------------------------------------#
+  vars <- apply(X_train, 2, var)
+  df_var <- data.frame(variable = variables, vars = round(vars, 4)) %>% arrange(desc(vars))
+  
+#-----------------------------------------------------4. RF Importance -----------------------------------------#
+######--------------------------------------------Permutation importance------------------------------------######
+
+  # Train a random forest model with impurity-based feature importance
+  rf_model <- ranger(
+    formula = Toxicity ~ ., 
+    data = data_train,  
+    importance = "impurity",  # Get impurity-based importance
+    classification = TRUE
+  )
+
+  # Extract impurity-based feature importance
+  impurity_importance <- rf_model$variable.importance
+  df_impurity <- data.frame(variable = variables, impurity_importance = round(impurity_importance,4)) %>%
+    arrange(desc(impurity_importance))
+  
+######---------------------------------------------Impurity importance---------------------------------------------######  
+  # Train a random forest model with impurity-based feature importance
+  rf_model <- ranger(
+    formula = Toxicity ~ ., 
+    data = data_train, 
+    importance = "permutation",  # Get impurity-based importance
+    classification = TRUE
+  )
+
+  # Extract permutation-based feature importance
+  permutation_importance <- rf_model$variable.importance
+
+  df_permutation <- data.frame(variable = variables, permutation_importance = round(permutation_importance,4)) %>%
+    arrange(desc(permutation_importance))
+
+#--------------------------------------------------5. Mutual Information ---------------------------------------#
+
+  # 1.
+
+  info_gain <- information_gain(formula = Toxicity~., data = data_train, type = "infogain")
+  info_gain <- info_gain[order(info_gain[,2], decreasing = TRUE),]
+  
+  # 2.
+  gain_ratio <- gain.ratio(Toxicity~., data = data_train)
+  gain_ratio <- sort_by.data.frame(gain_ratio, gain_ratio$attr_importance, decreasing = TRUE)
+  
+  # 3.
+  sym_unc <- symmetrical.uncertainty(Toxicity~., data = data_train)
+  sym_unc <- sort_by.data.frame(sym_unc, sym_unc$attr_importance, decreasing = TRUE)
+  
+  
+  # 4.
+  mim <- MIM(X_train, y_train, k = ncol(X_train))
+  df_mim <- data.frame(variable = variables, mim = round(mim$score, 4)) %>% arrange(desc(mim))
+  
+  # 5.
+  mrmr <- MRMR(X = X_train, Y = y_train, k = ncol(X_train))
+  df_mrmr <- data.frame(variable = variables, mrmr = round(mrmr$score, 4)) %>% arrange(desc(mrmr))
+  
+  # 6.
+  jmi <- JMI(X = X_train, Y = y_train, k = ncol(X_train))
+  df_jmi <- data.frame(variable = variables, jmi = round(jmi$score, 4)) %>% arrange(desc(jmi))
+  
+  # 7.
+  jmim <- JMIM(X = X_train, Y = y_train, k = ncol(X_train))
+  df_jmim <- data.frame(variable = variables, jmim = round(jmim$score, 4)) %>% arrange(desc(jmim))
+  
+  # 8.
+  disr <- DISR(X = X_train, Y = y_train, k = ncol(X_train))
+  df_disr <- data.frame(variable = variables, disr = round(disr$score, 4)) %>% arrange(desc(disr))
+  
+  # 9.
+  njmim <- NJMIM(X = X_train, Y = y_train, k = ncol(X_train))
+  df_njmim <- data.frame(variable = variables, njmim = round(njmim$score, 4)) %>% arrange(desc(njmim))
+  
+  # 10.
+  cmim <- CMIM(X = X_train, Y = y_train, k = ncol(X_train))
+  df_cmim <- data.frame(variable = variables, cmim = round(cmim$score, 4)) %>% arrange(desc(cmim))
+  
+  # Combine the sorted data frames into one table
+  result <- data.frame(
+    v_anova = df_anova$variable, anova_scr = df_anova$anova_scr,
+    v_chi = df_chi$variable, chi_scr = df_chi$chi_scr,
+    v_kruskal = df_kruskal$variable, kruskal_scr = df_kruskal$kruskal_scr,
+    v_aucs = df_aucs$variable, aucs = df_aucs$aucs,
+    v_oneR = df_oneR$variable, oneR = df_oneR$attr_importance,
+    v_accs = df_accuracies$variable, accs = df_accuracies$accuracies,
+    v_vars = df_var$variable, vars = df_var$vars,
+    v_impur = df_impurity$variable, imp = df_impurity$impurity_importance,
+    v_perm = df_permutation$variable, perm = df_permutation$permutation_importance,
+    v_i.gain = info_gain$attributes, info_gain = round(info_gain$importance, 4),
+    v_gain.r = rownames(gain_ratio), gain.r = round(gain_ratio$attr_importance, 4),
+    v_sym = rownames(sym_unc), sym = round(sym_unc$attr_importance, 4),
+    v_mim = df_mim$variable, mim = df_mim$mim,
+    v_mrmr = df_mrmr$variable, mrmr = df_mrmr$mrmr, 
+    v_jmi = df_jmi$variable, jmi = df_jmi$jmi,
+    v_jmim = df_jmim$variable, jmim = df_jmim$jmim,
+    v_disr = df_disr$variable, disr = df_disr$disr,
+    v_njmim = df_njmim$variable, njmim = df_njmim$njmim,
+    v_cmim = df_cmim$variable, cmim = df_cmim$cmim
+    )
+  return(result)
+}
+```

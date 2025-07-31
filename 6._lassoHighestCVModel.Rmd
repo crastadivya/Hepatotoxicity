@@ -1,0 +1,129 @@
+---
+title: "5._lassoHighestCVModel"
+author: "Divya Prima Crasta-237879"
+date: "2025-07-14"
+output: html_document
+---
+
+```{r}
+library(splitTools)
+library(caret)
+
+library(ExclusiveLasso)
+```
+
+# Selecting the best model
+
+```{r}
+library(glmnet)
+library(gglasso)
+library(ExclusiveLasso)
+```
+```{r}
+# For Lasso
+nc_la <- 0
+lambdas_la_o <- simResults[1, seq(1, 400, by = 4)]
+best_lambda_la_index1 <- which.max(simResults2_numeric_r$Lasso_cv)
+best_lambda_la_1 <- simResults[1, (best_lambda_la_index1 - 1)*4 + 1]
+        #lambdas_la_o[best_lambda_la_index1][[1]]
+#.Random.seed <- seeds[((best_lambda_la_index1 - 1) * 626 + 1) : (best_lambda_la_index1 * 626)]
+set.seed(best_lambda_la_index1)
+train_indices1 <- createDataPartition(factor(y), p = 0.8, list = FALSE)
+train_X1 <- X_scaled[train_indices1, ]
+test_X1 <- X_scaled[-train_indices1, ]
+train_y1 <- y[train_indices1]
+test_y1 <- y[-train_indices1]
+best_mod_la1 <- glmnet(train_X1, train_y1, family = "binomial", alpha = 1, intercept = TRUE, lambda = best_lambda_la_1)
+train_pred_la1 <- ifelse(predict(best_mod_la1, train_X1, type = "response") > 0.5, 1, 0)
+test_pred_la1 <- ifelse(predict(best_mod_la1, test_X1, type = "response") > 0.5, 1, 0)
+train_acc_la1 <- mean(train_pred_la1 == train_y1)
+test_acc_la1 <- mean(test_pred_la1 == test_y1)
+
+print("Lasso")
+print(train_acc_la1)
+print(test_acc_la1)
+
+# For Group Lasso
+nc_gr <- 0
+lambdas_gr_o <- simResults[2, seq(1, 400, by = 4)]
+best_lambda_gr_index1 <- which.max(simResults2_numeric_r$Group_cv)
+best_lambda_gr_1 <- simResults[2, (best_lambda_gr_index1 - 1)*4 + 1]
+        #lambdas_gr_o[best_lambda_gr_index1][[1]]
+#.Random.seed <- seeds[((best_lambda_gr_index1 - 1) * 626 + 1) : (best_lambda_gr_index1 * 626)]
+set.seed(best_lambda_gr_index1)
+train_indices1 <- createDataPartition(factor(y), p = 0.8, list = FALSE)
+train_X1 <- X_scaled[train_indices1, ]
+test_X1 <- X_scaled[-train_indices1, ]
+train_y1 <- y[train_indices1]
+test_y1 <- y[-train_indices1]
+train_y2_1 <- y2[train_indices1]
+test_y2_1 <- y2[-train_indices1]
+best_mod_gr1 <- gglasso(train_X1, train_y2_1, loss = "logit", intercept = TRUE, lambda = best_lambda_gr_1, group = v.group)
+train_pred_gr1 <- predict(best_mod_gr1, train_X1)
+test_pred_gr1 <- predict(best_mod_gr1, test_X1)
+train_acc_gr1 <- mean(train_pred_gr1 == train_y2_1)
+test_acc_gr1 <- mean(test_pred_gr1 == test_y2_1)
+
+print("Group lasso")
+print(train_acc_gr1)
+print(test_acc_gr1)
+
+nc <- 0
+lambdas_ex_o <- seq(0.00002, 0.00005, length.out = 100)
+best_lambda_ex_index1 <-which.max(simResults2_numeric_r$Exclusive_cv)
+best_lambda_ex_1 <- simResults[3, (best_lambda_ex_index1 - 1)*4 + 1]
+        #lambdas_ex_o[best_lambda_ex_index1]
+#.Random.seed <- seeds[((best_lambda_ex_index1 -1) * 626 + 1) : (best_lambda_ex_index1 * 626)]
+set.seed(best_lambda_ex_index1)
+train_indices1 <- createDataPartition(factor(y), p = 0.8, list = FALSE)
+train_X1 <- X_scaled[train_indices1, ]
+test_X1 <- X_scaled[-train_indices1, ]
+train_y1 <- y[train_indices1]
+test_y1 <- y[-train_indices1]
+best_mod_ex1 <- tryCatch( { exclusive_lasso(train_X1, train_y1, family = "binomial", intercept = TRUE, lambda =  best_lambda_ex_1, groups = v.group) },
+                             error = function(e) {NULL})
+if(!is.null(best_mod_ex1)){
+  train_pred_ex1 <- ifelse(predict(best_mod_ex1, train_X1, type = "response") > 0.5, 1, 0)
+  test_pred_ex1 <- ifelse(predict(best_mod_ex1, test_X1, type = "response") > 0.5, 1, 0)
+}else{
+  nc <- 1
+  train_pred_ex1 <- rep(1, length(train_y1))
+  test_pred_ex1 <- rep(1, length(test_y1))
+}
+train_acc_ex1 <- mean(train_pred_ex1 == train_y1)
+test_acc_ex1 <- mean(test_pred_ex1 == test_y1)
+
+print("Exclusive lasso")
+print(train_acc_ex1)
+print(test_acc_ex1)
+#print(best_mod_ex1)
+```
+
+```{r}
+# Convert sparse matrix to data frame
+la_coef_df <- as.data.frame(as.matrix(best_mod_la1$beta))
+
+# Add variable names as a column
+la_coef_df$Variable <- rownames(coef_df)
+
+# Rename the coefficient column
+colnames(la_coef_df)[1] <- "Coefficient"
+
+# Round coefficients
+la_coef_df$Coefficient <- round(la_coef_df$Coefficient, 4)
+
+# Reorder columns: Variable first
+la_coef_df <- la_coef_df[, c("Variable", "Coefficient")]
+
+# Write to CSV
+write.csv(coef_df, "E:/Thesis/Report/lasso.csv", row.names = FALSE)
+```
+
+```{r}
+write.csv(data.frame(as.matrix(round(best_mod_gr1$beta, 4))), "E:/Thesis/Report/Group_lasso.csv")
+```
+
+```{r}
+write.csv(as.matrix(round(best_mod_ex1$coef, 4)), "E:/Thesis/Report/Exc_lasso.csv", row.names = FALSE)
+```
+

@@ -1,0 +1,120 @@
+---
+title: "1._eda"
+author: "Divya Prima Crasta-237879"
+date: "2025-07-14"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(GGally)
+library(knitr)
+library(corrplot)
+```
+
+
+```{r}
+load('E:\Thesis\Report\Codes\data\combined_assay_data.RData')
+X <- assay.data[,3:length(assay.data)]
+assay.data$Toxicity <- factor(assay.data$Toxicity, levels = unique(assay.data$Toxicity))
+y <- assay.data$Toxicity
+```
+
+
+```{r}
+# Cmax normalization and log transformation
+X_n <- apply(X[,2:length(X)], 2, function(x) x / X$Cmax)
+X_n_l <- apply(X_n, 2, log)
+X_l <- apply(X, 2, log)
+
+# The missing values were imputed with 5 times the maximum value in the dataset given and they were indicated by penalty of 1.
+X_n_l2 = X_n_l
+X_n_l2[penalty.data[,-1] == 1 ] <-  NA
+X_n_l2 = data.frame(X_n_l2)
+data_n_l2 <- cbind(X_n_l2, Toxicity = as.factor(y))
+
+#X_n_l is normalized by Cmax and logarithmized
+#X_n_l2 is normalized by Cmax and logarithmized with missing values
+```
+
+
+# Univariate analysis
+
+## Summary statistics
+
+```{r}
+# Function to calculate the required statistics for each column
+summary_stats <- function(x) {
+  c(
+    minimum = min(x, na.rm = TRUE),
+    Q1 = quantile(x, 0.25, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    mean = mean(x, na.rm = TRUE),
+    Q3 = quantile(x, 0.75, na.rm = TRUE),
+    maximum = max(x, na.rm = TRUE),
+    variance = var(x, na.rm = TRUE),
+    sd = sd(x, na.rm = TRUE),
+    range = max(x, na.rm = TRUE) - min(x, na.rm = TRUE)
+  )
+}
+
+# Apply the function to each column of the selected data
+summary_df <- as.data.frame(t(apply(X_n_l2, 2, summary_stats)))
+
+# Print the result
+print(summary_df)
+```
+
+
+## Boxplots
+
+```{r}
+long_data <- X_n_l2 %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
+
+long_data$Variable <- factor(long_data$Variable, levels = colnames(X_n_l2))
+
+ggplot(long_data, aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "#ADD8E6", outlier.color = "red") +
+  theme_minimal(base_family = "serif") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, face = "bold")
+  ) +
+  labs(
+    #title = "Boxplots of Imputed Features",
+    x = "Feature",
+    y = "Value"
+  )
+```
+
+## Histograms
+
+```{r}
+# Loop through each column of the dataset 'X'
+for (i in 1:ncol(X_n_l2)) {
+  
+  # Get the column name
+  col_name <- colnames(X_n_l2)[i]
+  
+  # Extract the mean and median for the current column from summary_df
+  mean_val <- summary_df[col_name, "mean"]
+  median_val <- summary_df[col_name, "median"]
+  
+  # Create the histogram and add vertical lines for mean and median
+  gg <- ggplot(X_n_l2, aes(x = get(col_name))) + 
+    geom_histogram( fill = "lightblue", color = "black") + 
+    geom_vline(aes(xintercept = mean_val), linetype = "dotted", color = "red", size = 1) + # Dotted red line for mean
+    geom_vline(aes(xintercept = median_val), linetype = "solid", color = "black", size = 1) + # Solid black line for median
+    xlab(col_name) + 
+    theme_minimal() +
+    labs(title = paste("Histogram of", col_name))
+  
+  # Print the plot
+  print(gg)
+}
+```

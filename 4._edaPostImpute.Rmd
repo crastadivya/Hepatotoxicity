@@ -1,0 +1,104 @@
+---
+title: "3._edaPostImpute"
+author: "Divya Prima Crasta-237879"
+date: "2025-07-14"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(GGally)
+library(knitr)
+library(corrplot)
+```
+```{r}
+data_imp <- read.csv("E:/Thesis/Report/Codes/data/data_imputed.csv")
+X_imp <- data_imp %>% select(-"Toxicity")
+y <- as.factor(as.numeric(data_imp$Toxicity))
+```
+```{r}
+summary_stats <- function(x) {
+  c(
+    minimum = min(x, na.rm = TRUE),
+    Q1 = quantile(x, 0.25, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    mean = mean(x, na.rm = TRUE),
+    Q3 = quantile(x, 0.75, na.rm = TRUE),
+    maximum = max(x, na.rm = TRUE),
+    variance = var(x, na.rm = TRUE),
+    sd = sd(x, na.rm = TRUE),
+    range = max(x, na.rm = TRUE) - min(x, na.rm = TRUE)
+  )
+}
+
+summary_df <- as.data.frame(t(apply(X_imp, 2, summary_stats)))
+summary_df
+#kable(summary_df, digits = 3, caption = "Summary Statistics of Imputed Features")
+```
+```{r}
+long_data <- X_imp %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
+
+long_data$Variable <- factor(long_data$Variable, levels = colnames(X_imp))
+
+ggplot(long_data, aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "#ADD8E6", outlier.color = "red") +
+  theme_minimal(base_family = "serif") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10, face = "bold"),  # Thicker font
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, face = "bold")
+  ) +
+  labs(
+    # title = "Boxplots of Imputed Features",
+    x = "Feature",
+    y = "Value"
+  )
+
+```
+```{r}
+for (i in 1:ncol(X_imp)) {
+  col_name <- colnames(X_imp)[i]
+  mean_val <- summary_df[col_name, "mean"]
+  median_val <- summary_df[col_name, "median"]
+
+  p <- ggplot(X_imp, aes(x = .data[[col_name]])) +
+    geom_histogram(fill = "skyblue", color = "black", bins = 30) +
+    geom_vline(xintercept = mean_val, color = "red", linetype = "dotted", size = 1) +
+    geom_vline(xintercept = median_val, color = "black", linetype = "solid", size = 1) +
+    labs(
+      title = paste("Histogram of", col_name),
+      x = col_name,
+      y = "Count"
+    ) +
+    theme_minimal(base_family = "serif")
+
+  print(p)
+}
+```
+```{r}
+cor_matrix <- cor(X_imp, use = "pairwise.complete.obs")
+
+high_cor <- which(abs(cor_matrix) > 0.9, arr.ind = TRUE)
+high_cor <- high_cor[high_cor[,1] != high_cor[,2], ]
+
+high_cor_pairs <- data.frame(
+  var1 = rownames(cor_matrix)[high_cor[, 1]],
+  var2 = colnames(cor_matrix)[high_cor[, 2]],
+  correlation = round(cor_matrix, 4)[high_cor]
+)
+
+# Remove duplicates
+high_cor_pairs <- high_cor_pairs[!duplicated(t(apply(high_cor_pairs, 1, sort))), ]
+high_cor_pairs <- high_cor_pairs[order(-abs(high_cor_pairs$correlation)), ]
+
+kable(high_cor_pairs, digits = 4, caption = "Highly Correlated Feature Pairs (|r| > 0.9)")
+cat("Total highly correlated pairs:", nrow(high_cor_pairs), "\n")
+high_cor_pairs
+```
+```{r}
+corrplot(cor_matrix, is.corr=FALSE, col=colorRampPalette(c("white", "blue"))(200), type = "upper", tl.col = "black" )
+```

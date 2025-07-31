@@ -1,0 +1,464 @@
+---
+title: "4._lasso"
+author: "Divya Prima Crasta-237879"
+date: "2025-07-14"
+output: html_document
+---
+
+```{r}
+library(splitTools)
+library(caret)
+library(rlist)
+library(dplyr)
+library(glmnet)
+library(gglasso)
+library(ExclusiveLasso)
+
+library(ggplot2)
+```
+
+```{r}
+data_imp <- read.csv("E:/Thesis/Report/Codes/data/data_imputed.csv")
+X_imp <- data_imp %>% select(-"Toxicity")
+X <- as.matrix(X_imp)
+y <- as.numeric(data_imp$Toxicity)
+y2 = ifelse(y == 0, -1, 1)
+beta = colnames(X)
+v.group <- c(1,1,1,2,2,2,3,3,3,4,4,4,5,5,5,6,6,7,7,7,8,8,8,9)
+
+# Scale the predictors (center + scale to unit variance)
+X_scaled <- scale(X)
+
+# Check scaling (mean ~0, sd ~1 for each column)
+colMeans(X_scaled)  # Should be ~0
+apply(X_scaled, 2, sd)  # Should be ~1
+```
+
+```{r}
+getAccuracy2 <- function(pred, true){
+  stopifnot(length(pred) == length(true))
+  return( mean(true == pred) )
+}
+
+cvStratified <- function(X, y, k = 5, run, predict.fun, lambda, l, ...){
+  #algorithm <- match.fun(algorithm)
+  predict.fun <- match.fun(predict.fun)
+  run <- match.fun(run)
+  n <- nrow(X)
+  #target <- as.character(formula)[2]
+  acc <- numeric(k)
+  set.seed(l)
+  folds <- createFolds(factor(y), k = 5, returnTrain = TRUE)
+  #folds = sample(rep(1:k, ceiling(n/k)))[1:n]
+  for(i in 1:k){
+    s <<- 0
+    train_X <- X[folds[[i]], ]
+    #train_X <- X[folds, ]
+    train_y <- y[folds[[i]] ]
+    #train_y <- y[folds]
+    test_X <- X[- folds[[i]], ]
+    #test_X <- X[-folds, ]
+    test_y <- y[- folds[[i]] ]
+    #test_y <- y[-folds]
+    mod <- do.call(run, list(train_X, train_y, lambda, ...))
+    if(!is.null(mod)){
+      pred <- predict.fun(mod, test_X)
+    }
+    else{
+      pred <- rep(1, length(test_y))
+      s <<- 1
+    }
+    acc[i] <- getAccuracy2(pred, test_y)
+    counter[l,i] <<- s
+  }
+  return(mean(acc))
+}
+
+run_lasso <- function(train_X, train_y, lambda){
+  glmnet(train_X, train_y, family = "binomial", alpha = 1, intercept = TRUE, lambda = lambda) #lambda
+}
+
+pred_lasso <- function(mod, test_X){
+  ifelse(predict(mod, test_X, type = "response") > 0.5, 1, 0)
+}
+
+run_lasso_gr <- function(train_X, train_y, lambda, ...){
+  gglasso(train_X, train_y, loss = "logit", intercept = TRUE, lambda = lambda, ...) #lambda, group
+}
+
+pred_lasso_gr <- function(mod, test_X){
+  ifelse(predict(mod, test_X) > 0, 1, -1)
+}
+
+run_lasso_ex <- function(train_X, train_y, lambda, ...){
+  mod <- tryCatch({ exclusive_lasso(train_X, train_y, family = "binomial", intercept = TRUE, lambda = lambda, ...) # group
+    }
+          , error = function(e) {NULL})
+  return(mod)
+}
+
+pred_lasso_ex <- function(mod, test_X){
+  ifelse(predict(mod, test_X, type = "response") > 0.5, 1, 0)
+}
+
+run_lasso_ex_pg <- function(train_X, train_y, lambda, ...){
+  mod <- tryCatch({ exclusive_lasso(train_X, train_y, family = "binomial", intercept = TRUE, lambda = lambda, algorithm = "pg",  ...) # group
+    }
+          , error = function(e) {NULL})
+  return(mod)
+}
+
+
+myTuneLambda <- function(X, y, k, run, predict.fun, lambdas, ...){
+  #algorithm <- match.fun(algorithm)
+  predict.fun <- match.fun(predict.fun)
+  run <- match.fun(run)
+  accs <- c()
+  counter <<- data.frame(matrix(nrow = length(lambdas), ncol = 5))
+  for(l in 1:length(lambdas)){
+    accs[l] <- do.call(cvStratified, c(list(X, y, k, run, predict.fun, lambdas[l], l, ...)))
+  }
+  best_acc <-  max(accs)
+  best_lambda = lambdas[which.max(accs)]
+  result <- list(best_lambda, best_acc)
+  #print(counter)
+  simCounter <<- list.append(simCounter, counter)
+  return(result)
+}
+```
+# Running lasso, group lasso and exclusive lasso 100 times
+```{r}
+lassoSimulation <- function(){
+  start_time <- Sys.time()
+  results <- data.frame(matrix(nrow = 3, ncol = 400))
+  simCounter <<- list()
+  seeds <<- c()
+  rownames(results) <- c("Lasso", "Group", "Exclusive")
+  for(i in seq(1,400,4)){
+    #print(i%/%2 + 1)
+    # Stratified Train-Test Split
+    set.seed(i%/%4 + i%%4)
+    train_indices <- createDataPartition(factor(y), p = 0.8, list = FALSE)
+    train_X <- X_scaled[train_indices, ]
+    test_X <- X_scaled[-train_indices, ]
+    train_y <- y[train_indices]
+    test_y <- y[-train_indices]
+    train_y2 <- y2[train_indices]
+    test_y2 <- y2[-train_indices]
+    
+    #Lasso
+    #lambdas_la <- seq(0.001, 0.27, length.out = 100)
+    lambdas_la <- exp(seq(-7, -2, length.out = 100))
+    cv_la_result <- myTuneLambda(train_X, train_y, k = 5, run_lasso, pred_lasso, lambdas = lambdas_la)
+    best_lambda_la <- cv_la_result[[1]]
+    train_cv_acc_la <- cv_la_result[[2]]
+    best_mod_la <- glmnet(train_X, train_y, family = "binomial", alpha = 1, intercept = TRUE, lambda = best_lambda_la)
+    train_pred_la <- ifelse(predict(best_mod_la, train_X, type = "response") > 0.5, 1, 0)
+    train_acc_la <-  mean(train_pred_la == train_y)
+    test_pred_la <- ifelse(predict(best_mod_la, test_X, type = "response") > 0.5, 1, 0)
+    test_acc_la <- mean(test_pred_la == test_y)
+    
+    #Group Lasso
+    # lambdas_gr <- seq(0.04, 0.4, length.out = 100)
+    lambdas_gr <- exp(seq(-4, -1, length.out = 100))
+    cv_gr_result <- myTuneLambda(train_X, train_y2, k = 5, run_lasso_gr, pred_lasso_gr, lambdas = lambdas_gr, group = v.group)
+    best_lambda_gr <- cv_gr_result[[1]]
+    train_cv_acc_gr <- cv_gr_result[[2]]
+    best_mod_gr <- gglasso(train_X, train_y2, loss = "logit", intercept = TRUE, lambda = best_lambda_gr, group = v.group)
+    train_pred_gr <- predict(best_mod_gr, train_X)
+    train_acc_gr <- mean(train_pred_gr == train_y2)
+    test_pred_gr <- predict(best_mod_gr, test_X)
+    test_acc_gr <- mean(test_pred_gr == test_y2)
+    
+    #Exclusive Lasso
+    #lambdas_ex <- seq(0.00002, 0.00005, length.out = 100)
+    lambdas_ex <- exp(seq(-12, -8, length.out = 100))
+    cv_ex_result <- myTuneLambda(train_X, train_y, k = 5, run_lasso_ex, pred_lasso_ex, lambdas = lambdas_ex, groups = v.group)
+    best_lambda_ex <- cv_ex_result[[1]]
+    train_cv_acc_ex <- cv_ex_result[[2]]
+    
+    best_mod_ex <- tryCatch( { exclusive_lasso(train_X, train_y, family = "binomial", intercept = TRUE, lambda =  best_lambda_ex, groups = v.group) },
+                             error = function(e) {NULL})
+    if(!is.null(best_mod_ex)){
+      train_pred_ex <- ifelse(predict(best_mod_ex, train_X, type = "response") > 0.5, 1, 0)
+      test_pred_ex <- ifelse(predict(best_mod_ex, test_X, type = "response") > 0.5, 1, 0)
+    }
+    else{
+      train_pred_ex <- rep(1, length(train_y))
+      test_pred_ex <- rep(1, length(test_y))
+    }
+    
+    train_acc_ex <- mean(train_pred_ex == train_y)
+    test_acc_ex <- mean(test_pred_ex == test_y)
+    
+    results[,i] <- c(best_lambda_la, best_lambda_gr, best_lambda_ex)
+    results[,i+1] <- c(train_cv_acc_la, train_cv_acc_gr, train_cv_acc_ex)
+    results[,i+2] <- c(train_acc_la, train_acc_gr, train_acc_ex)
+    results[,i+3] <- c(test_acc_la, test_acc_gr, test_acc_ex)
+  }
+  end_time = Sys.time()
+  print(end_time-start_time)
+  return(results)
+}
+
+```
+
+```{r}
+simResults <- lassoSimulation()
+```
+
+# Visualization of results
+
+```{r}
+  simResults2 <- data.frame(matrix(nrow = 100, ncol = 9))
+  for(i in seq(1, by = 3,9)){
+    for(j in 0:2){
+     simResults2[[(i+j)]] = as.vector(simResults[(i%/%3 + 1),seq(2+j, by = 4, 400)])
+    }
+  }
+
+  cols <- c()
+  Lasso_names <- c("Lasso", "Group", "Exclusive")
+  acc_names <- c("cv", "train", "test")
+for(l_name in Lasso_names){
+  for(acc_name in acc_names){
+    cols = c(cols, paste(l_name, acc_name, sep = "_"))
+  }
+}
+colnames(simResults2) <- cols
+
+simResults2$SL.NO <- 1:100
+
+```
+
+```{r}
+simResults2_numeric <- as.data.frame(apply(simResults2, 2, as.numeric))
+simResults2_numeric_r <- round(simResults2_numeric, 4)
+```
+
+# Plots
+
+```{r}
+ggplot(data = simResults2_numeric_r, aes(x = SL.NO)) +
+  geom_line(aes(y = Lasso_cv, color = "cv"), size = 1.2) +
+  geom_line(aes(y = Lasso_train, color = "train"), size = 1.2) +
+  geom_line(aes(y = Lasso_test, color = "test"), size = 1.2, linetype = "dashed") +
+  scale_color_manual(
+    values = c("cv" = "#D55E00", "train" = "#999999", "test" = "#0072B2"),
+    labels = c("cv" = "CV", "train" = "Train", "test" = "Test")
+  ) +
+  labs(y = "Accuracy", x = "SL.NO") +
+  theme_minimal(base_size = 16) +
+  theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 14),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    legend.position = "bottom"
+  )
+```
+
+```{r}
+ggplot(data = simResults2_numeric_r, aes(x = SL.NO)) +
+  geom_line(aes(y = Group_cv, color = "cv"), size = 1.2) +
+  geom_line(aes(y = Group_train, color = "train"), size = 1.2) +
+  geom_line(aes(y = Group_test, color = "test"), size = 1.2, linetype = "dashed") +
+  scale_color_manual(
+    values = c("cv" = "#D55E00", "train" = "#999999", "test" = "#0072B2"),
+    labels = c("cv" = "CV", "train" = "Train", "test" = "Test")
+  ) +
+  labs(y = "Accuracy", x = "SL.NO") +
+  theme_minimal(base_size = 16) +
+  theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 14),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    legend.position = "bottom"
+  )
+```
+
+```{r}
+ggplot(data = simResults2_numeric_r, aes(x = SL.NO)) +
+  geom_line(aes(y = Exclusive_cv, color = "cv"), size = 1.2) +
+  geom_line(aes(y = Exclusive_train, color = "train"), size = 1.2) +
+  geom_line(aes(y = Exclusive_test, color = "test"), size = 1.2, linetype = "dashed") +
+  scale_color_manual(
+    values = c("cv" = "#D55E00", "train" = "#999999", "test" = "#0072B2"),
+    labels = c("cv" = "CV", "train" = "Train", "test" = "Test")
+  ) +
+  labs(y = "Accuracy", x = "SL.NO") +
+  theme_minimal(base_size = 16) +
+  theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 14),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    legend.position = "bottom"
+  )
+```
+
+
+# Nested tuning
+
+```{r}
+# Nested CV function (modified for X_scaled)
+nested_cv <- function(X_scaled, y, outer_folds = 5, inner_folds = 5,
+                      method = c("lasso", "group", "exclusive"),
+                      lambda_grid = NULL, group = NULL) {
+
+  method <- match.arg(method)
+  outer_folds_list <- createFolds(factor(y), k = outer_folds, returnTrain = TRUE)
+  outer_accs <- numeric(outer_folds)
+
+  for (i in 1:outer_folds) {
+    # Outer split using scaled X
+    train_X <- X_scaled[outer_folds_list[[i]], ]
+    train_y <- y[outer_folds_list[[i]]]
+    train_y2 <- y2[outer_folds_list[[i]]]
+    test_X <- X_scaled[-outer_folds_list[[i]], ]
+    test_y <- y[-outer_folds_list[[i]]]
+    test_y2 <- y2[-outer_folds_list[[i]]]
+
+    inner_folds_list <- createFolds(factor(train_y), k = inner_folds, returnTrain = TRUE)
+    # Inner CV (rest of the function remains the same but operates on scaled X)
+    if (method == "lasso") {
+      if (is.null(lambda_grid)) {
+        lambda_grid <- exp(seq(-7, -2, length.out = 100))
+      }
+      for (l in 1:length(lambda_grid)) {
+        lambda <- lambda_grid[l]
+        acc <- numeric(inner_folds)
+        for (j in 1:inner_folds) {
+          inner_train_X <- train_X[inner_folds_list[[j]], ]
+          inner_train_y <- train_y2[inner_folds_list[[j]]]
+          inner_test_X <- train_X[-inner_folds_list[[j]], ]
+          inner_test_y <- train_y2[-inner_folds_list[[j]]]
+          model <- glmnet(inner_train_X, inner_train_y, family = "binomial", alpha = 1, intercept = TRUE, lambda = lambda)
+          pred_inner_y <- ifelse(predict(model, inner_test_X, type = "response") > 0.5, 1, 0)
+          acc[j] <- mean(pred_inner_y == inner_test_y)
+        }
+        cv_accs[l] <- mean(acc)
+      }
+
+      best_lambda <- lambda_grid[which.max(cv_accs)]
+      model <- glmnet(train_X, train_y, family = "binomial", alpha = 1, intercept = TRUE, lambda = best_lambda)
+      test_pred <- ifelse(predict(model_outer, test_X, type = "response") > 0.5, 1 , 0)
+      outer_accs[k] <- mean(test_pred == test_y)
+    }
+       else if (method == "group") {
+      train_y2 <- ifelse(train_y == 0, -1, 1)
+      test_y2 <- ifelse(test_y == 0, -1, 1)
+
+      if (is.null(lambda_grid)) {
+        lambda_grid <- exp(seq(-4, -1, length.out = 100))
+      }
+
+      # Custom CV for group lasso
+      cv_accs <- numeric(length(lambda_grid))
+
+      for (l in 1:length(lambda_grid)) {
+        lambda <- lambda_grid[l]
+        acc <- numeric(inner_folds)
+
+        for (j in 1:inner_folds) {
+          inner_train_X <- train_X[inner_folds_list[[j]], ]
+          inner_train_y <- train_y2[inner_folds_list[[j]]]
+          inner_test_X <- train_X[-inner_folds_list[[j]], ]
+          inner_test_y <- train_y2[-inner_folds_list[[j]]]
+
+          model <- gglasso(inner_train_X, inner_train_y, loss = "logit",
+                          intercept = TRUE, lambda = lambda, group = group)
+          pred <- sign(predict(model, inner_test_X))
+          acc[j] <- mean(pred == inner_test_y)
+        }
+        cv_accs[l] <- mean(acc)
+      }
+
+      best_lambda <- lambda_grid[which.max(cv_accs)]
+      model <- gglasso(train_X, train_y2, loss = "logit",
+                      intercept = TRUE, lambda = best_lambda, group = group)
+      train_pred <- sign(predict(model, train_X))
+      test_pred <- sign(predict(model, test_X))
+      outer_accs[k] <- mean(test_pred == test_y2)
+
+    } else if (method == "exclusive") {
+      if (is.null(lambda_grid)) {
+        lambda_grid <- exp(seq(-12, -8, length.out = 100))
+      }
+
+      # Custom CV for exclusive lasso
+      cv_accs <- numeric(length(lambda_grid))
+
+      for (l in 1:length(lambda_grid)) {
+        lambda <- lambda_grid[l]
+        acc <- numeric(inner_folds)
+        valid <- TRUE
+
+        for (j in 1:inner_folds) {
+          inner_train_X <- train_X[inner_folds_list[[j]], ]
+          inner_train_y <- train_y[inner_folds_list[[j]]]
+          inner_test_X <- train_X[-inner_folds_list[[j]], ]
+          inner_test_y <- train_y[-inner_folds_list[[j]]]
+
+          model <- tryCatch({
+            exclusive_lasso(inner_train_X, inner_train_y, family = "binomial",
+                          intercept = TRUE, lambda = lambda, groups = group)
+          }, error = function(e) NULL)
+
+          if (is.null(model)) {
+            valid <- FALSE
+            break
+          }
+
+          pred <- ifelse(predict(model, inner_test_X, type = "response") > 0.5, 1, 0)
+          acc[j] <- mean(pred == inner_test_y)
+        }
+
+        if (valid) {
+          cv_accs[l] <- mean(acc)
+        } else {
+          cv_accs[l] <- -1  # Mark as invalid
+        }
+      }
+
+      if (all(cv_accs == -1)) {
+        best_lambda <- NA
+        train_pred <- rep(1, length(train_y))
+        test_pred <- rep(1, length(test_y))
+        cv_acc <- NA
+      } else {
+        best_lambda <- lambda_grid[which.max(cv_accs)]
+        model <- tryCatch({
+          exclusive_lasso(train_X, train_y, family = "binomial",
+                        intercept = TRUE, lambda = best_lambda, groups = group)
+        }, error = function(e) NULL)
+
+        if (is.null(model)) {
+          train_pred <- rep(1, length(train_y))
+          test_pred <- rep(1, length(test_y))
+        } else {
+          train_pred <- ifelse(predict(model, train_X, type = "response") > 0.5, 1, 0)
+          test_pred <- ifelse(predict(model, test_X, type = "response") > 0.5, 1, 0)
+        }
+        outer_accs[k] <- mean(test_pred == test_y)
+      }
+    }
+
+    # Store results
+    result <- mean(outer_accs)
+  }
+
+  return(result)
+}
+
+# Run nested CV on scaled data
+set.seed(123)
+lasso_result <- nested_cv(X_scaled, y, method = "lasso")
+group_result <- nested_cv(X_scaled, y, method = "group", group = v.group)
+exclusive_result <- nested_cv(X_scaled, y, method = "exclusive", group = v.group)
+print(lasso_result, group_result, exclusive_result)
+```

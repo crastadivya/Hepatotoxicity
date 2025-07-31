@@ -1,0 +1,239 @@
+---
+title: "6._postFilterAccuracies"
+author: "Divya Prima Crasta-237879"
+date: "2025-07-14"
+output: html_document
+---
+
+```{r}
+library(caret)
+
+# Load required libraries
+library(mlr3)
+library(mlr3tuning)
+library(xgboost)
+library(mlr3learners)
+library(mlr3extralearners)  # Required for XGBoost learner
+library(paradox)
+library(foreach)
+library(doParallel)
+
+library(RColorBrewer)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+```{r}
+data_imp <- read.csv("E:/Thesis/Report/Codes/data/data_imputed.csv")
+X_imp <- data_imp %>% select(-"Toxicity")
+y <- data_imp$Toxicity
+```
+
+
+```{r}
+n <- nrow(X_imp)
+set.seed(123)
+
+# Create stratified folds
+folds <- createFolds(factor(y), k = 5, returnTrain = TRUE)
+
+results <- list()
+for(k in 1:5){
+  train_indices <- folds[[k]]
+  data_train <- data_imp[train_indices, ]
+  results[[k]] <- get_filter(data_train)
+}
+```
+
+```{r}
+results_var<- list()
+for(k in 1:5){
+  results_var[[k]] <- results[[k]][seq(1, ncol(results[[1]]), 2)]
+}
+```
+
+```{r}
+variables <- colnames(X_imp)
+filter_names <- colnames(results_var[[1]])
+rows <- 1:23
+# Register parallel backend
+cl <- makeCluster(detectCores() - 1)  # Use all but one core
+registerDoParallel(cl)
+
+# Define learner with tuning
+lrn_xgb <- lrn("classif.xgboost",
+  nrounds = to_tune(100, 500, logscale = FALSE),
+  max_depth = to_tune(1, 5, logscale = FALSE),
+  eta = to_tune(0.1, 0.5, logscale = FALSE)
+)
+
+# Parallelized outer loop
+Nestedfilter_accuracies <- foreach(filter_name = filter_names, .combine = cbind, .packages = c("mlr3", "mlr3tuning", "xgboost", "paradox", "mlr3learners", "mlr3extralearners")) %dopar% {
+  accuracies_per_filter_measure <- numeric(length(rows))  # Store accuracies for the current column
+  
+  for(row in rows){
+    accuracies <- numeric(5)
+  for(k in 1:5){
+    data_train <- data_imp[folds[[k]], ]
+    rows_subset <- results_var[[k]][(1:row), filter_name] # selects the top variables
+    vars_subset <- sapply(rows_subset, function(var) which(variables == var)) # gets the position of those top variables in   original dataset
+    data_subset <- data_imp[, vars_subset, drop = FALSE]
+    data_subset$Toxicity <- as.factor(data_imp$Toxicity)
+    #task_subset <- TaskClassif$new(id = "data", backend = data_subset, target = "Toxicity")
+    # Create train task
+    data_train_subset <- data_subset[folds[[k]], ]
+    task_train_subset <- TaskClassif$new(id = paste0("train_", k, "_", row), backend = data_train_subset, target = "Toxicity")
+    # Define tuning instance
+    instance_xgb_train_subset <- ti(
+    task = task_train_subset,
+    learner = lrn_xgb,
+    resampling = rsmp("cv", folds = 5),
+    measures = msr("classif.ce"),
+    terminator = trm("evals", n_evals = 50)  # Add termination criterion
+    )
+    # Perform tuning
+    tuner <- tnr("random_search")
+    tuner$optimize(instance_xgb_train_subset)
+    
+    # Train the model with best hyperparameters on full training task
+    lrn_xgb_final <- lrn("classif.xgboost")
+    lrn_xgb_final$param_set$values <- instance_xgb_train_subset$result_learner_param_vals
+    lrn_xgb_final$train(task_train_subset)
+    # Predict on test data
+    data_test_subset <- data_subset[-folds[[k]], ]
+    task_test_subset <- TaskClassif$new(id = paste0("test_", k, "_", row), backend = data_test_subset, target = "Toxicity")
+    prediction <- lrn_xgb_final$predict(task_test_subset)
+    # Calculate accuracy
+    accuracy <- prediction$score(msr("classif.acc"))
+    accuracies[k] <- accuracy
+  }
+  accuracies_per_filter_measure[row] <- mean(accuracies)
+  }
+  accuracies_per_filter_measure  # Return the column for combining
+}
+
+# Stop the parallel backend
+stopCluster(cl)
+
+# Convert the result to a data frame
+Nestedfilter_accuracies <- as.data.frame(Nestedfilter_accuracies)
+```
+
+```{r}
+Nestedfilter_accuracies$Index <- 1:nrow(Nestedfilter_accuracies)
+```
+
+# Plot of accuracies
+```{r}
+# Group definitions
+groups_list <- list(
+  "Univariate Tests" = c("anova", "kruskal", "chi"),
+  "Univariate Predictive Performance" = c("aucs", "oneR", "accs"),
+  "Variance" = c("vars"),
+  "Random Forest Importance" = c("imp", "perm"),
+  "Mutual Information" = c("info_gain", "gain.r", "sym", "mim", "mrmr", 
+                           "jmi", "jmim", "disr", "njmim", "cmim")
+)
+
+# Color mapping
+group_colors <- c(
+  setNames(brewer.pal(9, "Blues")[c(3,5,7)], groups_list[[1]]),
+  setNames(brewer.pal(9, "Greens")[c(3,5,7)], groups_list[[2]]),
+  setNames(brewer.pal(9, "Reds")[5], groups_list[[3]]),
+  setNames(brewer.pal(9, "Purples")[c(4,6)], groups_list[[4]]),
+  setNames(brewer.pal(11, "YlOrBr")[2:11], groups_list[[5]])
+)
+# Preserve column order for legend
+method_order <- colnames(Nestedfilter_accuracies)[!colnames(Nestedfilter_accuracies) %in% "Index"]
+
+# Create plot
+Nestedfilter_accuracies %>%
+  pivot_longer(-Index, names_to = "Method", values_to = "Accuracy") %>%
+  mutate(Method = factor(Method, levels = method_order)) %>%
+  ggplot(aes(x = Index, y = Accuracy, color = Method)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 1.5) +
+  scale_x_continuous(breaks = seq(1, max(Nestedfilter_accuracies$Index), 1)) +
+  scale_color_manual(values = group_colors, breaks = method_order) +
+  labs(
+    title = "Nested Filter Method Performance Comparison",
+    x = "Number of Top Features",
+    y = "Accuracy",
+    color = "Filter Method"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    legend.key.height = unit(0.8, "cm"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "serif", size = 14),
+    plot.title = element_text(face = "bold", size = 16)
+  ) +
+  guides(color = guide_legend(ncol = 1))
+```
+
+# Group-wise plot
+```{r}
+
+# Define filter groups based on your classification
+group1 <- c("anova", "kruskal", "chi")          
+group2 <- c("aucs", "oneR", "accs")      
+group3 <- c("vars")                     
+group4 <- c("imp", "perm") 
+group5 <- c("info_gain", "gain.r", "sym", "mim", "mrmr", "jmi", "jmim", "disr", "njmim", "cmim")  
+
+groups_list <- list(
+  "Univariate Tests" = group1,
+  "Univariate Predictive Performance" = group2,
+  "Variance" = group3,
+  "Random Forest Importance" = group4,
+  "Mutual Information" = group5
+)
+
+# Pivot the data to long format
+long_df <- Nestedfilter_accuracies |>
+  pivot_longer(-Index, names_to = "Method", values_to = "Accuracy")
+
+# Assign group labels
+long_df <- long_df |>
+  mutate(
+    Group = case_when(
+      Method %in% group1 ~ "Univariate Tests",
+      Method %in% group2 ~ "Univariate Predictive Performance",
+      Method %in% group3 ~ "Variance",
+      Method %in% group4 ~ "Random Forest Importance",
+      Method %in% group5 ~ "Mutual Information",
+      TRUE ~ "Other"
+    )
+  )
+
+# Define consistent colors across all plots
+all_methods <- unique(long_df$Method)
+palette_colors <- setNames(RColorBrewer::brewer.pal(8, "Dark2")[1:length(all_methods)], all_methods)
+
+# Function to generate individual plot per group
+plot_group <- function(group_name, df) {
+  df_group <- df |> filter(Group == group_name)
+  ggplot(df_group, aes(x = Index, y = Accuracy, color = Method)) +
+    geom_line(linewidth = 1) +
+    scale_color_manual(values = group_colors) +
+    coord_cartesian(ylim = c(0.65, 0.85)) +
+    labs(
+      title = group_name,
+      x = "Number of Top-Ranked Features",
+      y = "Accuracy"
+    ) +
+    theme_minimal(base_family = "serif") +
+    theme(
+      text = element_text(size = 14),
+      legend.position = "right",
+      legend.title = element_blank(),
+      plot.title = element_text(face = "bold", size = 15)
+    )
+}
+
+# Generate and arrange all plots
+plots <- map(names(groups_list), ~plot_group(.x, long_df))
+wrap_plots(plots, ncol = 2)
+```

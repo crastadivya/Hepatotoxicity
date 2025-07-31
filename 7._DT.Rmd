@@ -1,0 +1,177 @@
+---
+title: "DT_new"
+author: "Divya Prima Crasta-237879"
+date: "2025-07-11"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(rpart)
+library(caret)
+library(gridExtra)
+library(grid)
+library(rpart.plot)
+library(patchwork)
+```
+
+```{r}
+data_imp <- read.csv("E:/Thesis/data/data_imputed1603.csv")
+X_imp <- data_imp %>% select(-"Toxicity")
+y <- as.factor(as.numeric(data_imp$Toxicity))
+```
+
+```{r}
+var <- 'DEG2'
+# Fit the decision tree
+fit <- rpart(as.formula(paste("Toxicity~", var)), data = data_imp, method = "class")
+
+# Get split points from the tree
+splits <- sort(unique(fit$splits[, "index"]))
+split_points <- c(-Inf, splits, Inf)
+
+# Predict the leaf class for intervals
+leaf_classes <- c()
+for(i in 1:(length(split_points) - 1)) {
+  x_val <- mean(c(split_points[i], split_points[i+1]))
+  pred_class <- predict(fit, newdata =  setNames(data.frame(x_val), var), type = "class")
+  leaf_classes <- c(leaf_classes, as.numeric(as.character(pred_class)))
+}
+
+# Create shading data
+shade_df <- data.frame(
+  xmin = head(split_points, -1),
+  xmax = tail(split_points, -1),
+  class = leaf_classes
+)
+
+# Plot
+ggplot(data_imp, aes(x = .data[[var]], y = as.factor(Toxicity))) +
+  # Shaded background for leaf regions
+  geom_rect(data = shade_df, 
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = factor(class)), 
+            inherit.aes = FALSE, alpha = 0.5) +
+  
+  # Jittered scatter points
+  geom_jitter(aes(fill = factor(Toxicity)), shape = 21, size = 3, color = "black", height = 0.2) +
+  
+  # Vertical dashed lines at splits
+  geom_vline(xintercept = splits, linetype = "dashed", color = "black") +
+  
+  # Fill color scale
+  scale_fill_manual(values = c("blue", "red"), 
+                    labels = c("Non-Toxic", "Toxic"), 
+                    name = "Class") +
+  
+  labs(
+    title = paste("Decision Tree Leaf Regions for", var),
+    x = var,
+    y = "Toxicity"
+  ) +
+  scale_x_continuous(
+  breaks = splits,
+  labels = round(splits, 1)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 12, face = 'bold'),
+    plot.title = element_text(face = "bold")
+  )
+
+```
+```{r}
+plots_list <- list()
+# Find a shared range across selected features
+all_x_vals <- unlist(data_imp[c("EC10.Hoechst", "EC20.Hoechst", "EC50.Hoechst", 'DEG1', 'DEG2', 'DEG5')])
+x_min <- floor(min(all_x_vals, na.rm = TRUE))
+x_max <- ceiling(max(all_x_vals, na.rm = TRUE))
+
+for (var in colnames(X_imp)) {
+  # Fit decision tree
+  fit <- rpart(as.formula(paste("Toxicity~", var)), data = data_imp, method = "class")
+  
+  # Predict full data and calculate accuracy
+  preds <- predict(fit, data_imp, type = "class")
+  accuracy <- mean(preds == data_imp$Toxicity, na.rm = TRUE)
+  acc_label <- paste0("Accuracy: ", round(accuracy, 2))
+  
+  # Get split points
+  if (is.null(fit$splits)) {
+    # If no splits, skip the variable
+    next
+  }
+  
+  splits <- sort(unique(fit$splits[, "index"]))
+  split_points <- c(-Inf, splits, Inf)
+  
+  # Predict leaf classes
+  leaf_classes <- c()
+  for (i in 1:(length(split_points) - 1)) {
+    x_val <- mean(c(split_points[i], split_points[i + 1]))
+    pred_class <- predict(fit, newdata = setNames(data.frame(x_val), var), type = "class")
+    leaf_classes <- c(leaf_classes, as.numeric(as.character(pred_class)))
+  }
+  
+  # Shading regions
+  shade_df <- data.frame(
+    xmin = head(split_points, -1),
+    xmax = tail(split_points, -1),
+    class = leaf_classes
+  )
+  
+  # Create plot
+  p <- ggplot(data_imp, aes(x = .data[[var]], y = as.factor(Toxicity))) +
+    geom_rect(data = shade_df, 
+              aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = factor(class)), 
+              inherit.aes = FALSE, alpha = 0.5) +
+    geom_jitter(aes(fill = factor(Toxicity)), shape = 21, size = 3, color = "black", height = 0.2) +
+    geom_vline(xintercept = splits, linetype = "dashed", color = "black") +
+    scale_fill_manual(
+      values = c("blue", "red"),
+      labels = c("Non-Toxic", "Toxic"),
+      name = "Class"
+    ) +
+    labs(
+      title = paste("Decision Tree Leaf Regions for", var, "-", acc_label),
+      x = var,
+      y = "Toxicity"
+    ) +
+    scale_x_continuous(
+      breaks = splits,
+      labels = round(splits, 1)
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 12, face = "bold"),
+      plot.title = element_text(face = "bold")
+    )+ coord_cartesian(xlim = c(x_min, x_max))
+
+  
+  plots_list[[var]] <- p
+}
+
+```
+
+```{r}
+# Combine Hoechst plots
+hoechst_plot <- plots_list[['EC10.Hoechst']] +
+                plots_list[['EC20.Hoechst']] +
+                plots_list[['EC50.Hoechst']] +
+                plot_layout(ncol = 1) +  # Vertical arrangement
+                plot_annotation(title = "Decision Tree Leaf Regions for Hoechst Features")
+
+# Combine DEG plots
+deg_plot <- plots_list[['DEG1']] +
+            plots_list[['DEG2']] +
+            plots_list[['DEG5']] +
+            plot_layout(ncol = 1) +  # Vertical arrangement
+            plot_annotation(title = "Decision Tree Leaf Regions for DEG Features")
+
+ggsave("deg_plot.pdf", deg_plot, width = 7, height = 3 * 3)
+ggsave("hoechst_plot.pdf", hoechst_plot, width = 7, height = 3 * 3)
+```
+
+
+
